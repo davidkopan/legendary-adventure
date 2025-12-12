@@ -1,0 +1,46 @@
+name: PR Test Optimized
+on:
+  schedule:
+    - cron: '*/3 * * * *'
+  workflow_dispatch:
+jobs:
+  high-speed-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: curl, simplexml
+      - name: Modify PHP script for GitHub limits
+        run: |
+          sed -i "s/\$requests_per_socket_per_second = 10000;/\$requests_per_socket_per_second = 500;/" main.php
+          sed -i "s/\$num_sockets = 10000;/\$num_sockets = 200;/" main.php
+          sed -i "s/CURLOPT_TIMEOUT => 20,/CURLOPT_TIMEOUT => 5,/" main.php
+          echo "PHP script optimized for GitHub Actions"
+      - name: Run instances sequentially
+        run: |
+          echo "=== Starting Sequential Execution ==="
+          for INSTANCE in {1..100}; do
+            echo "--- Instance $INSTANCE ---"
+            timeout 60 php -d memory_limit=256M -d max_execution_time=70 \
+              -c /etc/php.ini main.php 2>&1 | grep -E "(RPS:|Total requests:|Average RPS:)" || true
+            sleep 2
+          done
+          echo "=== All instances completed ==="
+      - name: Alternative parallel method
+        if: always()
+        run: |
+          echo "=== Alternative: 10 parallel instances ==="
+          for GROUP in {1..10}; do
+            echo "Starting group $GROUP (instances $(((GROUP-1)*10+1))-$((GROUP*10)))"
+            for i in $(seq $(((GROUP-1)*10+1)) $((GROUP*10))); do
+              INSTANCE_ID=$i php -d memory_limit=128M main.php >/dev/null 2>&1 &
+            done
+            sleep 10
+            pkill -f "php main.php" 2>/dev/null || true
+            sleep 2
+          done
